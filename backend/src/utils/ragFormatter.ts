@@ -26,9 +26,9 @@ const responseSchema = z.object({
 });
 
 // Bind the schema to the LLM to force structured JSON output
-const structuredLlm = llm.withStructuredOutput(responseSchema);
+const structuredLlm = llm.withStructuredOutput(responseSchema, { includeRaw: true });
 
-export async function formatRagResponse(query: string, chunks: any[]) {
+export async function formatRagResponse(query: string, chunks: any[], generation?: any) {
   // If no context was found, return an empty response
   if (!chunks.length) {
     return {
@@ -74,16 +74,36 @@ STRICT RULES:
 7. If no items are found return an empty array for items.
 `;
 
+  // Langfuse: Log the constructed prompt (with context) as the input to the generation
+  if (generation) {
+    generation.update({
+      input: prompt,
+    });
+  }
+
   try {
     // Generate the structured response using the prompt
-    const response = await structuredLlm.invoke(prompt);
+    const response: any = await structuredLlm.invoke(prompt);
+    const parsedData = response.parsed;
+    const usage = response.raw?.usage_metadata;
+
+    // Langfuse: Log the actual token usage reported by Gemini
+    if (generation && usage) {
+      generation.update({
+        usage: {
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          unit: "TOKENS",
+        },
+      });
+    }
     
     // Transform the metadata array back into a readable key-value object for the frontend
     const formattedResponse = {
-      ...response,
-      items: response.items.map((item) => ({
+      ...parsedData,
+      items: parsedData.items.map((item: any) => ({
         ...item,
-        metadata: item.metadata.reduce((acc, curr) => {
+        metadata: item.metadata.reduce((acc: any, curr: any) => {
           acc[curr.key] = curr.value;
           return acc;
         }, {} as Record<string, string>),
