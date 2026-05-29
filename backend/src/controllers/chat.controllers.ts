@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 
 import { retrieveChunks } from "../ingest/retrieve";
 import { formatRagResponse } from "../utils/ragFormatter";
+import { langfuse } from "../config/langfuse";
 
 export const retrieveChat = async (
   req: Request,
@@ -18,16 +19,52 @@ export const retrieveChat = async (
       });
     }
 
+    // Langfuse: Create a main trace for the entire chat request
+    const trace = langfuse.trace({
+      name: "catalog-chat",
+      userId: "anonymous",
+      input: {
+        query,
+      },
+    });
+
     // Step 1: Retrieve relevant document chunks from Qdrant
+    // Langfuse: Create a child span to monitor the retrieval step (latency and output)
+    const retrievalSpan = trace.span({
+      name: "retrieval",
+    });
+
     const chunks = await retrieveChunks(query);
 
+    // Langfuse: End the retrieval span and log the chunks retrieved and their scores
+    retrievalSpan.end({
+      output: {
+        chunkCount: chunks.length,
+        chunks: chunks.map((chunk: any) => ({
+          pageNumber: chunk.pageNumber,
+          score: chunk.score,
+        })),
+      },
+    });
+
+    // Langfuse: Create a child generation to monitor the Gemini LLM call
+    const generation = trace.generation({
+      name: "gemini-response",
+      model: "gemini-2.5-flash",
+    });
+
     // Step 2: Pass the chunks and query to the LLM to format the final answer
-    const answer = await formatRagResponse(query, chunks);
+    const answer = await formatRagResponse(query, chunks, generation);
+
+    // Langfuse: End the generation and log the final output from Gemini
+    generation.end({
+      output: answer,
+    });
 
     // Step 3: Extract unique references (file name and page number) to send back
     const references = [
       ...new Map(
-        chunks.map((chunk) => [
+        chunks.map((chunk: any) => [
           `${chunk.fileName}-${chunk.pageNumber}`,
           {
             fileName: chunk.fileName,
@@ -36,6 +73,17 @@ export const retrieveChat = async (
         ])
       ).values(),
     ];
+
+    // Langfuse: Update the main trace with the overall success and result count
+    trace.update({
+      output: {
+        success: true,
+        resultCount: answer.items?.length || 0,
+      },
+    });
+
+    // Langfuse: Flush the events to ensure they are sent to the server
+    await langfuse.flushAsync();
 
     // Return the generated answer and the source references
     return res.json({
