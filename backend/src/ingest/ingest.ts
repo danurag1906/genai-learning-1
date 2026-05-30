@@ -12,16 +12,16 @@ import { chunkMarkdown, extractPageNumber } from "./chunk";
 
 import { embeddings } from "./embed";
 
-import { qdrant, COLLECTION_NAME } from "./qdrant";
+import { qdrant } from "./qdrant";
 
-async function createCollection() {
+async function createCollection(collectionName: string) {
   try {
     /**
      * Delete old collection first
      */
-    await qdrant.deleteCollection(COLLECTION_NAME);
+    await qdrant.deleteCollection(collectionName);
 
-    console.log("🗑️ Old collection deleted");
+    console.log(`🗑️ Old collection deleted: ${collectionName}`);
   } catch (error) {
     console.log("ℹ️ No old collection found");
   }
@@ -30,7 +30,7 @@ async function createCollection() {
    * Create fresh collection
    * with correct Gemini dimensions
    */
-  await qdrant.createCollection(COLLECTION_NAME, {
+  await qdrant.createCollection(collectionName, {
     vectors: {
       size: 3072,
 
@@ -38,12 +38,16 @@ async function createCollection() {
     },
   });
 
-  console.log("✅ Qdrant collection created");
+  console.log(`✅ Qdrant collection created: ${collectionName}`);
 }
 
 async function ingestCatalogs() {
   try {
-    await createCollection();
+    const genericCol = process.env.QDRANT_COLLECTION!;
+    const stonesCol = process.env.QDRANT_STONES_COLLECTION!;
+
+    await createCollection(genericCol);
+    await createCollection(stonesCol);
 
     const pdfFiles = await glob(path.join(process.cwd(), "src/catalog/*.pdf"));
 
@@ -51,6 +55,10 @@ async function ingestCatalogs() {
 
     for (const pdfFile of pdfFiles) {
       console.log(`\n📄 Processing: ${pdfFile}`);
+      
+      const isStone = pdfFile.toLowerCase().includes("stone");
+      const targetCollection = isStone ? stonesCol : genericCol;
+      console.log(`🎯 Targeting collection: ${targetCollection}`);
 
       // STEP 1
       // Parse PDF using LlamaParse for high-quality markdown extraction
@@ -82,7 +90,7 @@ async function ingestCatalogs() {
         // Extract page number
         const pageNumber = extractPageNumber(chunk.pageContent);
 
-        await qdrant.upsert(COLLECTION_NAME, {
+        await qdrant.upsert(targetCollection, {
           wait: false,
 
           points: [
