@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import { retrieveChunks } from "../ingest/retrieve";
 import { formatRagResponse } from "../utils/ragFormatter";
 import { langfuse } from "../config/langfuse";
+import { routeQuery } from "../utils/queryRouter";
 
 export const retrieveChat = async (
   req: Request,
@@ -34,7 +35,14 @@ export const retrieveChat = async (
       name: "retrieval",
     });
 
-    const chunks = await retrieveChunks(query);
+    // Classify the intent
+    const category = await routeQuery(query, trace);
+    const targetCollection =
+      category === "stones"
+        ? process.env.QDRANT_STONES_COLLECTION!
+        : process.env.QDRANT_COLLECTION!;
+
+    const chunks = await retrieveChunks(query, targetCollection, trace);
 
     // Langfuse: End the retrieval span and log the chunks retrieved and their scores
     retrievalSpan.end({
